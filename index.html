@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ChatTR</title>
+<style>
+body { font-family: Arial; background:#2f3136; color:white; margin:0; padding:0;}
+#login-screen { text-align:center; margin-top:100px;}
+input { padding:10px; margin:5px;}
+button { padding:10px;}
+#chat-screen { display:flex; height:100vh;}
+#friends-list, #requests-list { width:200px; background:#202225; padding:10px;}
+#chat-window { flex:1; display:flex; flex-direction:column;}
+#messages { flex:1; overflow-y:auto; padding:10px; background:#36393f;}
+#messageInput { padding:10px; width:calc(100% - 80px);}
+.friend, .request { cursor:pointer; padding:5px; border-bottom:1px solid #444;}
+.friend:hover, .request:hover { background:#2f3136;}
+#voiceCall { margin-top:5px; padding:5px; cursor:pointer; background:#7289da; color:white; border:none;}
+audio { display:block; margin-top:5px; }
+</style>
+</head>
+<body>
+
+<div id="login-screen">
+  <h1>ChatTR</h1>
+  <input type="text" id="username" placeholder="Kullanc Ad">
+  <button id="loginBtn">Giri Yap / Kayt Ol</button>
+</div>
+
+<div id="chat-screen" style="display:none;">
+  <div id="requests-list"><h3>stekler</h3></div>
+  <div id="friends-list"><h3>Arkadalar</h3></div>
+  <div id="chat-window">
+    <div id="messages"></div>
+    <input type="text" id="messageInput" placeholder="Mesaj yaz...">
+    <button id="sendBtn">Gönder</button>
+    <div id="call-area"></div>
+  </div>
+</div>
+
+<script>
+let username = "";
+let localStream;
+let peerConnection;
+let currentFriend = "";
+
+const servers = null; // ICE servers bo, sadece lokal p2p demo
+
+document.getElementById("loginBtn").addEventListener("click", () => {
+  const input = document.getElementById("username").value.trim();
+  if(!input) return;
+  username = input;
+  
+  if(!localStorage.getItem("users")) localStorage.setItem("users", JSON.stringify([]));
+  let users = JSON.parse(localStorage.getItem("users"));
+
+  if(!users.some(u => u.username === username)){
+    users.push({username, friends:[], requests:[]});
+    localStorage.setItem("users", JSON.stringify(users));
+  }
+  
+  document.getElementById("login-screen").style.display="none";
+  document.getElementById("chat-screen").style.display="flex";
+  loadRequests();
+  loadFriends();
+});
+
+// Arkadalk istekleri
+function loadRequests(){
+  const requestsDiv = document.getElementById("requests-list");
+  requestsDiv.innerHTML="<h3>stekler</h3>";
+  const users = JSON.parse(localStorage.getItem("users"));
+  const me = users.find(u=>u.username===username);
+  me.requests.forEach(req=>{
+    const div = document.createElement("div");
+    div.textContent = req;
+    div.className="request";
+    const acceptBtn = document.createElement("button");
+    acceptBtn.textContent="Kabul Et";
+    acceptBtn.onclick = ()=>{
+      me.friends.push(req);
+      const other = users.find(u=>u.username===req);
+      other.friends.push(username);
+      me.requests = me.requests.filter(r=>r!==req);
+      localStorage.setItem("users", JSON.stringify(users));
+      loadRequests();
+      loadFriends();
+    };
+    div.appendChild(acceptBtn);
+    requestsDiv.appendChild(div);
+  });
+}
+
+// Arkada listesi
+function loadFriends(){
+  const friendsDiv = document.getElementById("friends-list");
+  friendsDiv.innerHTML="<h3>Arkadalar</h3>";
+  const users = JSON.parse(localStorage.getItem("users"));
+  const me = users.find(u=>u.username===username);
+  
+  me.friends.forEach(f=>{
+    const div = document.createElement("div");
+    div.textContent = f;
+    div.className="friend";
+    div.onclick = ()=>selectFriend(f);
+    friendsDiv.appendChild(div);
+  });
+  
+  const notFriends = users.filter(u=>u.username!==username && !me.friends.includes(u.username) && !me.requests.includes(u.username));
+  notFriends.forEach(u=>{
+    const div = document.createElement("div");
+    div.textContent = "stek Gönder: "+u.username;
+    div.className="friend";
+    div.onclick = ()=>{
+      u.requests.push(username);
+      localStorage.setItem("users", JSON.stringify(users));
+      alert(u.username+" adl kullancya istek gönderildi!");
+    };
+    friendsDiv.appendChild(div);
+  });
+}
+
+// Mesajlama
+function selectFriend(friend){
+  currentFriend = friend;
+  const messagesDiv = document.getElementById("messages");
+  messagesDiv.innerHTML="";
+  const msgs = JSON.parse(localStorage.getItem("messages")||"[]");
+  msgs.filter(m=> (m.from===username && m.to===friend) || (m.from===friend && m.to===username))
+      .forEach(m=>addMessage(m.from, m.text));
+  
+  // Sesli arama butonu
+  const callArea = document.getElementById("call-area");
+  callArea.innerHTML = "";
+  const btn = document.createElement("button");
+  btn.id="voiceCall";
+  btn.textContent="Sesli Ara";
+  btn.onclick=startCall;
+  callArea.appendChild(btn);
+}
+
+document.getElementById("sendBtn").addEventListener("click",()=>{
+  const text = document.getElementById("messageInput").value.trim();
+  if(text && currentFriend){
+    addMessage(username, text);
+    const msgs = JSON.parse(localStorage.getItem("messages")||"[]");
+    msgs.push({from:username,to:currentFriend,text});
+    localStorage.setItem("messages",JSON.stringify(msgs));
+    document.getElementById("messageInput").value="";
+  }
+});
+
+function addMessage(from, text){
+  const div = document.createElement("div");
+  div.textContent = `${from}: ${text}`;
+  document.getElementById("messages").appendChild(div);
+  document.getElementById("messages").scrollTop = document.getElementById("messages").scrollHeight;
+}
+
+// Basit WebRTC sesli arama (peer-to-peer)
+async function startCall(){
+  if(!currentFriend) return alert("Önce bir arkada seçin!");
+  localStream = await navigator.mediaDevices.getUserMedia({ audio:true });
+  const audio = document.createElement("audio");
+  audio.autoplay = true;
+  audio.srcObject = localStream;
+  document.getElementById("call-area").appendChild(audio);
+
+  peerConnection = new RTCPeerConnection(servers);
+  localStream.getTracks().forEach(track=>peerConnection.addTrack(track, localStream));
+
+  peerConnection.ontrack = e=>{
+    const remoteAudio = document.createElement("audio");
+    remoteAudio.autoplay = true;
+    remoteAudio.srcObject = e.streams[0];
+    document.getElementById("call-area").appendChild(remoteAudio);
+  };
+
+  const offer = await peerConnection.createOffer();
+  await peerConnection.setLocalDescription(offer);
+
+  alert("WebRTC balant demo: Bu GitHub Pages üzerinde sadece tek taraycda çalr. Arkadanza sinyal gönderme ksm eklenmedi.");
+}
+</script>
+</body>
+</html>
